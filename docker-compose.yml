@@ -14,26 +14,7 @@ services:
       - PYTHONPATH=/app
     volumes:
       - ./api:/app/api
-      - ./crawler:/app/crawler  # Shared modules
       - ./scoring:/app/scoring  # Shared modules
-    depends_on:
-      - rabbitmq
-    restart: unless-stopped
-
-  # Crawler Service
-  crawler:
-    build: .
-    command: sh -c "cd crawler && python crawler_consumer.py"
-    env_file:
-      - crawler/.env
-    environment:
-      - SERVICE_TYPE=crawler
-      - HEADLESS_MODE=true
-      - PYTHONPATH=/app
-    volumes:
-      - ./crawler/data:/app/crawler/data
-      - ./crawler:/app/crawler
-      - ./api:/app/api  # Shared modules
     depends_on:
       - rabbitmq
     restart: unless-stopped
@@ -68,19 +49,5 @@ services:
       - rabbitmq_data:/var/lib/rabbitmq
     restart: unless-stopped
 
-  # Optional: PostgreSQL Database (jika tidak pakai Supabase)
-  # postgres:
-  #   image: postgres:13
-  #   environment:
-  #     - POSTGRES_DB=linkedin_crawler
-  #     - POSTGRES_USER=postgres
-  #     - POSTGRES_PASSWORD=password123
-  #   volumes:
-  #     - postgres_data:/var/lib/postgresql/data
-  #   ports:
-  #     - "5432:5432"
-  #   restart: unless-stopped
-
 volumes:
   rabbitmq_data:
-  # postgres_data:
