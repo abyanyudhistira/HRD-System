@@ -758,7 +758,7 @@ async def get_queue_status():
     try:
         from helper.rabbitmq_helper import queue_publisher
         queue_info = queue_publisher.get_queue_info()
-        return queue_info or {"queue": "crawler_queue", "messages": 0, "consumers": 0}
+        return queue_info or {"queue": "linkedin_profiles", "messages": 0, "consumers": 0}
     except Exception as e:
         logger.error(f"Error getting queue status: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -933,20 +933,71 @@ async def execute_schedule_manually(schedule_id: str):
 @handle_api_errors
 async def start_scraping(request: ScrapingRequest):
     """Start scraping process"""
+    global current_crawl_session
+    
     try:
         from helper.rabbitmq_helper import queue_publisher
+        from helper.supabase_helper import SupabaseManager
         
-        payload = {
-            "template_id": request.template_id,
-            "source": "manual"
-        }
+        # Get template details first
+        supabase_manager = SupabaseManager()
+        template = supabase_manager.get_template_by_id(request.template_id)
         
-        queue_publisher.publish("crawler_queue", payload)
+        if not template:
+            return ScrapingResponse(
+                success=False,
+                message="Template not found",
+                leads_queued=0,
+                batch_id=f"manual_{request.template_id}_{int(time.time())}"
+            )
+        
+        template_name = template.get('name', 'Unknown Template')
+        
+        # Get leads that need processing
+        leads = supabase_manager.get_leads_by_template_id(request.template_id)
+        
+        if not leads:
+            return ScrapingResponse(
+                success=False,
+                message=f"No leads found for template '{template_name}'",
+                leads_queued=0,
+                batch_id=f"manual_{request.template_id}_{int(time.time())}"
+            )
+        
+        needs_processing = [lead for lead in leads if lead.get('needs_processing', False)]
+        
+        if not needs_processing:
+            return ScrapingResponse(
+                success=True,
+                message=f"All {len(leads)} leads already complete for template '{template_name}'",
+                leads_queued=0,
+                batch_id=f"manual_{request.template_id}_{int(time.time())}"
+            )
+        
+        # Queue individual leads
+        queued_count = 0
+        for lead in needs_processing:
+            success = queue_publisher.publish_crawler_job(
+                profile_url=lead['profile_url'],
+                template_id=request.template_id
+            )
+            if success:
+                queued_count += 1
+        
+        # Update session like execute_schedule_manually does
+        current_crawl_session.update({
+            'is_active': True,
+            'source': 'manual',
+            'template_id': request.template_id,
+            'template_name': template_name,
+            'started_at': datetime.now().isoformat(),
+            'leads_queued': queued_count
+        })
         
         return ScrapingResponse(
             success=True,
-            message="Scraping started successfully",
-            leads_queued=1,
+            message=f"Scraping started successfully for template '{template_name}'",
+            leads_queued=queued_count,  # Real count
             batch_id=f"manual_{request.template_id}_{int(time.time())}"
         )
         
