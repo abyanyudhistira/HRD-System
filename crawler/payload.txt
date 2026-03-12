@@ -1,0 +1,7 @@
+{
+  "job_id": "test-01",
+  "name": "Abyan Yudhistira",
+  "profile_url": "https://www.linkedin.com/in/abyan-yudhistira-24b8b733a/",
+  "message": "Hai {lead_name}, Saya Aktsa dari BPR KS. Kami tertarik dengan profile Anda untuk posisi Desk Collection. Silakan melamar: https://tinyurl.com/bprks-desk-collection-hire. Thanks!",
+  "dry_run": true
+}

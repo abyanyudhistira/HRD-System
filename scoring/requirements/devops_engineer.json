@@ -1,0 +1,26 @@
+{
+  "position": "DevOps Engineer",
+  "job_description": "We need a DevOps engineer to manage our infrastructure and deployment pipelines. You will work with cloud platforms, containerization, orchestration, and CI/CD tools. Strong knowledge of Linux, scripting, and infrastructure as code is required. Experience with monitoring, logging, and security best practices is essential.",
+  "required_skills": {
+    "Linux": 10,
+    "Docker": 9,
+    "Kubernetes": 9,
+    "AWS": 9,
+    "CI/CD": 9,
+    "Terraform": 8,
+    "Git": 8,
+    "Bash": 7
+  },
+  "preferred_skills": {
+    "Jenkins": 7,
+    "GitLab CI": 7,
+    "Ansible": 7,
+    "Prometheus": 6,
+    "Grafana": 6,
+    "ELK Stack": 6,
+    "Python": 6,
+    "Helm": 6
+  },
+  "min_experience_years": 3,
+  "education_level": ["Bachelor", "Master"]
+}

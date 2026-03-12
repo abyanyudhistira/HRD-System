@@ -1,0 +1,83 @@
+{
+  "position": "Desk Collection - BPR KS Bandung",
+  "requirements": [
+    {
+      "id": "gender",
+      "type": "gender",
+      "label": "Gender: Female",
+      "value": "female"
+    },
+    {
+      "id": "location",
+      "type": "location",
+      "label": "Location: Bandung",
+      "value": "bandung"
+    },
+    {
+      "id": "age_range",
+      "type": "age",
+      "label": "Age: 20-35 years",
+      "value": "20-35"
+    },
+    {
+      "id": "min_experience",
+      "type": "experience",
+      "label": "Minimum 1 years experience",
+      "value": 1
+    },
+    {
+      "id": "skill_communication",
+      "type": "skill",
+      "label": "Skill: Communication",
+      "value": "communication"
+    },
+    {
+      "id": "skill_customer_service",
+      "type": "skill",
+      "label": "Skill: Customer Service",
+      "value": "customer service"
+    },
+    {
+      "id": "skill_debt_collection",
+      "type": "skill",
+      "label": "Skill: Debt Collection",
+      "value": "debt collection"
+    },
+    {
+      "id": "skill_desk_collection",
+      "type": "skill",
+      "label": "Skill: Desk Collection",
+      "value": "desk collection"
+    },
+    {
+      "id": "skill_negotiation",
+      "type": "skill",
+      "label": "Skill: Negotiation",
+      "value": "negotiation"
+    },
+    {
+      "id": "skill_persuasion",
+      "type": "skill",
+      "label": "Skill: Persuasion",
+      "value": "persuasion"
+    },
+    {
+      "id": "skill_outbound_call",
+      "type": "skill",
+      "label": "Skill: Outbound Call",
+      "value": "outbound call"
+    },
+    {
+      "id": "skill_microsoft_office",
+      "type": "skill",
+      "label": "Skill: Microsoft Office",
+      "value": "microsoft office"
+    },
+    {
+      "id": "education",
+      "type": "education",
+      "label": "Education: Bachelor",
+      "value": "bachelor"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "position": "Frontend Developer",
+  "job_description": "We need a talented frontend developer to create beautiful and responsive user interfaces. You should be proficient in React, TypeScript, and modern CSS frameworks. Experience with state management, performance optimization, and responsive design is essential. Knowledge of Next.js and testing frameworks is a plus.",
+  "required_skills": {
+    "JavaScript": 10,
+    "TypeScript": 9,
+    "React": 10,
+    "HTML": 8,
+    "CSS": 8,
+    "Responsive Design": 7,
+    "Git": 7
+  },
+  "preferred_skills": {
+    "Next.js": 8,
+    "Redux": 6,
+    "Tailwind CSS": 6,
+    "Jest": 5,
+    "Webpack": 5,
+    "GraphQL": 6,
+    "Figma": 5
+  },
+  "min_experience_years": 2,
+  "education_level": ["Bachelor", "Master"]
+}

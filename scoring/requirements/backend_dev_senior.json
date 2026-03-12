@@ -1,0 +1,27 @@
+{
+  "position": "Senior Backend Developer",
+  "job_description": "We are looking for an experienced backend developer to build scalable web applications. You will work with Python, FastAPI, PostgreSQL, and cloud technologies. Strong understanding of RESTful APIs, microservices architecture, and database optimization is required. Experience with Docker, Redis, and AWS is a plus.",
+  "required_skills": {
+    "Python": 10,
+    "FastAPI": 8,
+    "Django": 8,
+    "Flask": 7,
+    "PostgreSQL": 8,
+    "MySQL": 6,
+    "REST API": 9,
+    "Git": 7,
+    "Linux": 6
+  },
+  "preferred_skills": {
+    "Docker": 7,
+    "Redis": 6,
+    "AWS": 8,
+    "Kubernetes": 6,
+    "MongoDB": 5,
+    "GraphQL": 5,
+    "Microservices": 7,
+    "CI/CD": 6
+  },
+  "min_experience_years": 3,
+  "education_level": ["Bachelor", "Master"]
+}

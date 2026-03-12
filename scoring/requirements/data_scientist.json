@@ -1,0 +1,26 @@
+{
+  "position": "Data Scientist",
+  "job_description": "We are seeking a data scientist to analyze complex datasets and build machine learning models. You will work with Python, pandas, scikit-learn, and deep learning frameworks. Strong statistical knowledge, data visualization skills, and experience with big data technologies are essential. PhD or Master's degree in a quantitative field is preferred.",
+  "required_skills": {
+    "Python": 10,
+    "Pandas": 9,
+    "NumPy": 8,
+    "Scikit-learn": 9,
+    "Machine Learning": 10,
+    "Statistics": 9,
+    "Data Visualization": 8,
+    "SQL": 8
+  },
+  "preferred_skills": {
+    "TensorFlow": 8,
+    "PyTorch": 8,
+    "Deep Learning": 9,
+    "NLP": 7,
+    "Computer Vision": 7,
+    "Spark": 7,
+    "AWS": 6,
+    "Docker": 5
+  },
+  "min_experience_years": 2,
+  "education_level": ["Master", "PhD", "Doctoral"]
+}

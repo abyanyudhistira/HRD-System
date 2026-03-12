@@ -1,0 +1,27 @@
+{
+  "position": "Full Stack Developer",
+  "job_description": "Looking for a versatile full stack developer who can handle both frontend and backend development. You will build complete web applications from database to user interface. Strong knowledge of JavaScript/TypeScript ecosystem, modern frameworks, and database systems is required. Experience with cloud deployment and DevOps practices is highly valued.",
+  "required_skills": {
+    "JavaScript": 10,
+    "TypeScript": 8,
+    "React": 9,
+    "Node.js": 9,
+    "Express": 7,
+    "PostgreSQL": 7,
+    "MongoDB": 6,
+    "REST API": 8,
+    "Git": 7
+  },
+  "preferred_skills": {
+    "Next.js": 8,
+    "NestJS": 7,
+    "Docker": 7,
+    "AWS": 7,
+    "Redis": 6,
+    "GraphQL": 6,
+    "CI/CD": 6,
+    "Microservices": 6
+  },
+  "min_experience_years": 3,
+  "education_level": ["Bachelor", "Master"]
+}

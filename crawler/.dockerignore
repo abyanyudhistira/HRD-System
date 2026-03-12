@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Data (will be created in container)
+data/
+profile/temporary/
+
+# Logs
+*.log
+
+# Documentation
+README.md
+*.md
+
+# Scripts
+activate.sh
+
+# Docker
+docker-compose.yml

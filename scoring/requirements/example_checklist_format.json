@@ -1,0 +1,56 @@
+{
+  "position": "Debt Collection Officer",
+  "requirements": [
+    {
+      "id": "gender",
+      "label": "Gender: Female",
+      "type": "gender",
+      "value": "female"
+    },
+    {
+      "id": "location",
+      "label": "Location: Jakarta",
+      "type": "location",
+      "value": "jakarta"
+    },
+    {
+      "id": "age_range",
+      "label": "Age: 25-35 years",
+      "type": "age",
+      "value": {
+        "min": 25,
+        "max": 35
+      }
+    },
+    {
+      "id": "min_experience",
+      "label": "Minimum 2 years experience",
+      "type": "experience",
+      "value": 2
+    },
+    {
+      "id": "debt_collection_exp",
+      "label": "Experience in Debt Collection",
+      "type": "experience",
+      "value": "debt collection"
+    },
+    {
+      "id": "skill_communication",
+      "label": "Communication Skills",
+      "type": "skill",
+      "value": "communication"
+    },
+    {
+      "id": "skill_negotiation",
+      "label": "Negotiation Skills",
+      "type": "skill",
+      "value": "negotiation"
+    },
+    {
+      "id": "education_bachelor",
+      "label": "Education: Bachelor's Degree",
+      "type": "education",
+      "value": "bachelor"
+    }
+  ]
+}
