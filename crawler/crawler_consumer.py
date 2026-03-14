@@ -11,7 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from crawler import LinkedInCrawler
 from helper.rabbitmq_helper import RabbitMQManager, ack_message, nack_message
-from helper.supabase_helper import SupabaseManager
+from helper.postgres_helper import SupabaseManager
 
 # Import pools
 from browser_pool import get_browser_pool, cleanup_browser_pool

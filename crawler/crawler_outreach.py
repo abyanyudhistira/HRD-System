@@ -11,7 +11,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from helper.rabbitmq_helper import RabbitMQManager, ack_message, nack_message
-from helper.supabase_helper import SupabaseManager
+from helper.postgres_helper import SupabaseManager
 from helper.browser_helper import create_driver, human_delay
 from helper.auth_helper import login
 

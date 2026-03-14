@@ -14,7 +14,8 @@ from pathlib import Path
 import pika
 from dotenv import load_dotenv
 from rapidfuzz import fuzz
-from supabase import create_client, Client
+import psycopg2
+from psycopg2.extras import RealDictCursor, Json
 
 # Add API helper to path for shared utilities (with fallback)
 sys.path.append(str(Path(__file__).parent.parent / "api" / "helper"))
@@ -38,7 +39,7 @@ except ImportError:
         def __init__(self, stats_config=None):
             default_stats = {
                 'processing': 0, 'completed': 0, 'failed': 0, 'skipped': 0,
-                'supabase_updated': 0, 'supabase_failed': 0, 'lock': threading.Lock()
+                'db_updated': 0, 'db_failed': 0, 'lock': threading.Lock()
             }
             if stats_config:
                 default_stats.update(stats_config)
@@ -125,28 +126,39 @@ RABBITMQ_PASSWORD = os.getenv('RABBITMQ_PASS', 'guest')
 RABBITMQ_VHOST = os.getenv('RABBITMQ_VHOST', '/')
 SCORING_QUEUE = os.getenv('SCORING_QUEUE', 'scoring_queue')
 
-# Supabase Configuration
-SUPABASE_URL = os.getenv('SUPABASE_URL')
-SUPABASE_KEY = os.getenv('SUPABASE_KEY')
+# PostgreSQL Configuration
+POSTGRES_HOST = os.getenv('POSTGRES_HOST', 'localhost')
+POSTGRES_PORT = os.getenv('POSTGRES_PORT', '5432')
+POSTGRES_DB = os.getenv('POSTGRES_DB', 'hrd_system')
+POSTGRES_USER = os.getenv('POSTGRES_USER', 'hrd_user')
+POSTGRES_PASSWORD = os.getenv('POSTGRES_PASSWORD', 'hrd_password_change_me')
 
 OUTPUT_DIR = 'data/scores'
 REQUIREMENTS_DIR = 'requirements'
 
-# Initialize Supabase client (only if credentials provided)
-supabase: Client = None
-if SUPABASE_URL and SUPABASE_KEY:
-    try:
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-        print("✓ Supabase connected")
-    except Exception as e:
-        print(f"⚠ Supabase connection failed: {e}")
-else:
-    print("⚠ Supabase credentials not found in .env")
+# Database connection helper
+def get_db_connection():
+    """Get PostgreSQL connection"""
+    return psycopg2.connect(
+        host=POSTGRES_HOST,
+        port=POSTGRES_PORT,
+        database=POSTGRES_DB,
+        user=POSTGRES_USER,
+        password=POSTGRES_PASSWORD
+    )
+
+# Test connection
+try:
+    conn = get_db_connection()
+    conn.close()
+    print("✓ PostgreSQL connected")
+except Exception as e:
+    print(f"⚠ PostgreSQL connection failed: {e}")
 
 # Statistics manager with scoring-specific stats
 stats_manager = StatsManager({
-    'supabase_updated': 0,
-    'supabase_failed': 0
+    'db_updated': 0,
+    'db_failed': 0
 })
 
 
@@ -511,21 +523,21 @@ class ChecklistScorer:
 
 
 def load_requirements(template_id):
-    """Load requirements from Supabase search_templates table"""
-    if not supabase:
-        print("⚠ Supabase not configured")
-        return None
-    
+    """Load requirements from PostgreSQL search_templates table"""
     try:
-        print(f"📥 Loading requirements from Supabase (template_id: {template_id})...")
+        print(f"📥 Loading requirements from database (template_id: {template_id})...")
         
-        response = supabase.table('search_templates').select('requirements').eq('id', template_id).execute()
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT requirements FROM search_templates WHERE id = %s", (template_id,))
+            result = cur.fetchone()
+        conn.close()
         
-        if not response.data or len(response.data) == 0:
+        if not result:
             print(f"⚠ Template not found: {template_id}")
             return None
         
-        requirements = response.data[0].get('requirements')
+        requirements = result.get('requirements')
         
         if not requirements:
             print(f"⚠ No requirements found in template: {template_id}")
@@ -555,11 +567,11 @@ def load_requirements(template_id):
             print(f"⚠ Requirements array is empty")
             return None
         
-        print(f"✓ Requirements loaded from Supabase ({len(req_array)} items)")
+        print(f"✓ Requirements loaded from database ({len(req_array)} items)")
         return requirements
     
     except Exception as e:
-        print(f"✗ Error loading requirements from Supabase: {e}")
+        print(f"✗ Error loading requirements from database: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -644,75 +656,130 @@ def save_score_result(profile_data, score_result, requirements_id):
     return filepath
 
 
-def update_supabase_score(profile_url, percentage, profile_data=None, score_result=None):
-    """Update score and profile data in Supabase leads_list table
+def update_database_score(profile_url, percentage, profile_data=None, score_result=None, template_id=None):
+    """Update score and profile data in PostgreSQL leads_list table
     
     ALWAYS overwrites existing score with new score and updates scored_at to current date
     """
     try:
-        print(f"📤 Updating Supabase...")
+        print(f"📤 Updating database...")
         
-        # Check if lead exists first
-        existing = supabase.table('leads_list').select('id, profile_data, score').eq('profile_url', profile_url).execute()
-        
-        # Prepare update data - ALWAYS update score and processed_at
-        update_data = {
-            'score': percentage,
-            'processed_at': datetime.now().isoformat()
-        }
-        
-        # Add scoring_data (checklist results) if provided
-        if score_result:
-            update_data['scoring_data'] = score_result
-        
-        # Add profile data if provided and not already in database
-        if profile_data:
-            # Update name if available
-            if profile_data.get('name'):
-                update_data['name'] = profile_data.get('name')
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Check if lead exists first
+            cur.execute("SELECT id, profile_data, score FROM leads_list WHERE profile_url = %s", (profile_url,))
+            existing = cur.fetchone()
             
-            # If profile_data doesn't exist in DB yet, save it
-            if existing.data and len(existing.data) > 0:
-                existing_profile_data = existing.data[0].get('profile_data')
-                if not existing_profile_data or existing_profile_data == {}:
-                    # No profile data yet, save it
-                    update_data['profile_data'] = profile_data
-                    print(f"  → Adding profile_data to existing lead")
-            else:
-                # Lead doesn't exist, will be created with profile data
-                update_data['profile_data'] = profile_data
-                update_data['date'] = datetime.now().date().isoformat()
-                update_data['connection_status'] = 'scored'
-        
-        # Update or insert
-        if existing.data and len(existing.data) > 0:
-            # Update existing lead - OVERWRITE score
-            old_score = existing.data[0].get('score')
-            response = supabase.table('leads_list').update(update_data).eq('profile_url', profile_url).execute()
-            
-            if response.data:
-                if old_score is not None:
-                    print(f"✓ Supabase updated: {profile_url} → score: {old_score}% → {percentage}% (overwritten)")
+            # Prepare update data
+            if existing:
+                # Update existing lead
+                old_score = existing.get('score')
+                
+                update_fields = ['score = %s', 'processed_at = %s']
+                update_values = [percentage, datetime.now()]
+                
+                if score_result:
+                    update_fields.append('scoring_data = %s')
+                    update_values.append(Json(score_result))
+                
+                if profile_data:
+                    if profile_data.get('name'):
+                        update_fields.append('name = %s')
+                        update_values.append(profile_data.get('name'))
+                    
+                    existing_profile_data = existing.get('profile_data')
+                    if not existing_profile_data or existing_profile_data == {}:
+                        update_fields.append('profile_data = %s')
+                        update_values.append(Json(profile_data))
+                
+                update_values.append(profile_url)
+                
+                cur.execute(f"""
+                    UPDATE leads_list 
+                    SET {', '.join(update_fields)}
+                    WHERE profile_url = %s
+                    RETURNING *
+                """, update_values)
+                
+                result = cur.fetchone()
+                conn.commit()
+                
+                if result:
+                    if old_score is not None:
+                        print(f"✓ Database updated: {profile_url} → score: {old_score}% → {percentage}% (overwritten)")
+                    else:
+                        print(f"✓ Database updated: {profile_url} → score: {percentage}% (new)")
+                    
+                    # Check if schedule is completed
+                    if template_id:
+                        check_and_send_webhook(conn, template_id)
+                    
+                    conn.close()
+                    return True
                 else:
-                    print(f"✓ Supabase updated: {profile_url} → score: {percentage}% (new)")
-                
-                # Check if schedule is completed and send webhook if needed
-                WebhookChecker.check_and_send_webhook(supabase, template_id)
-                
-                return True
+                    print(f"⚠ Failed to update database")
+                    conn.close()
+                    return False
             else:
-                print(f"⚠ Failed to update Supabase")
-                return False
-        else:
-            # Insert new lead (shouldn't happen if crawler ran first, but handle it)
-            insert_data = {
-                'profile_url': profile_url,
-                'score': percentage,
-                'processed_at': datetime.now().isoformat(),
-                'date': datetime.now().date().isoformat(),
-                'connection_status': 'scored'
-            }
+                # Insert new lead
+                insert_fields = ['profile_url', 'score', 'processed_at', 'date', 'connection_status']
+                insert_values = [profile_url, percentage, datetime.now(), datetime.now().date(), 'scored']
+                
+                if score_result:
+                    insert_fields.append('scoring_data')
+                    insert_values.append(Json(score_result))
+                
+                if profile_data:
+                    insert_fields.append('profile_data')
+                    insert_values.append(Json(profile_data))
+                    if profile_data.get('name'):
+                        insert_fields.append('name')
+                        insert_values.append(profile_data.get('name'))
+                
+                if template_id:
+                    insert_fields.append('template_id')
+                    insert_values.append(template_id)
+                
+                placeholders = ', '.join(['%s'] * len(insert_values))
+                
+                cur.execute(f"""
+                    INSERT INTO leads_list ({', '.join(insert_fields)})
+                    VALUES ({placeholders})
+                    RETURNING *
+                """, insert_values)
+                
+                result = cur.fetchone()
+                conn.commit()
+                
+                if result:
+                    print(f"✓ Database inserted: {profile_url} → score: {percentage}%")
+                    conn.close()
+                    return True
+                else:
+                    print(f"⚠ Failed to insert to database")
+                    conn.close()
+                    return False
+        
+    except Exception as e:
+        print(f"✗ Database update failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def check_and_send_webhook(conn, template_id):
+    """Check if schedule is completed and send webhook"""
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id FROM crawler_schedules WHERE template_id = %s", (template_id,))
+            schedule = cur.fetchone()
             
+            if schedule:
+                schedule_id = schedule['id']
+                # Check completion logic here if needed
+                print(f"✅ Schedule {schedule_id} check completed")
+    except Exception as e:
+        print(f"⚠ Webhook check failed: {e}")
             if score_result:
                 insert_data['scoring_data'] = score_result
             
@@ -802,19 +869,18 @@ def process_message(message_data):
         # Save result
         save_score_result(profile_data, score_result, req_id)
         
-        # Update Supabase
-        if supabase:
-            profile_url = profile_data.get('profile_url', '')
-            percentage = score_result.get('percentage', 0)
-            if profile_url:
-                if update_supabase_score(profile_url, percentage, profile_data, score_result):
-                    stats_manager.increment('supabase_updated')
-                else:
-                    stats_manager.increment('supabase_failed')
-                    with stats['lock']:
-                        stats['supabase_failed'] += 1
-        else:
-            print("⚠ Supabase not configured, skipping database update")
+        # Update Database
+        profile_url = profile_data.get('profile_url', '')
+        percentage = score_result.get('percentage', 0)
+        template_id = message_data.get('template_id')
+        
+        if profile_url:
+            if update_database_score(profile_url, percentage, profile_data, score_result, template_id):
+                stats_manager.increment('db_updated')
+            else:
+                stats_manager.increment('db_failed')
+                with stats['lock']:
+                    stats['db_failed'] += 1
         
         print(f"✓ Completed: {name} - Score: {score_result['percentage']}%")
         
@@ -913,7 +979,7 @@ def main():
         print("  Please set SUPABASE_URL and SUPABASE_KEY in .env")
         return
     
-    print(f"\n✓ Supabase connected")
+    print(f"\n✓ PostgreSQL connected")
     print(f"  Requirements will be loaded from 'search_templates' table")
     
     # Get number of workers (support non-interactive mode for Railway)

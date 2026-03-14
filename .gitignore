@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+*.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Docker
+docker-compose.override.yml
+
+# Crawler data
+crawler/data/output/
+crawler/data/cookie/*.json
+!crawler/data/cookie/.gitkeep
+crawler/profile/*.json
+
+# Scoring data
+scoring/data/scores/
+scoring/data/profiles/
+
+# Backup files
+*.backup
+*.bak
+*.old
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+
+# Test files
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Documentation (keep only main README)
+# MIGRATION*.md
+# CHECKLIST*.md
+# *_GUIDE.md

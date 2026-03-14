@@ -23,7 +23,7 @@ sys.path.append(str(Path(__file__).parent.parent / "crawler"))
 from scheduler_service import SchedulerService
 from database import Database
 from helper.rabbitmq_helper import queue_publisher
-from helper.supabase_helper import ScheduleManager, CompanyManager, LeadsManager, ReQueueManager, SupabaseManager, supabase
+from helper.postgres_helper import ScheduleManager, LeadsManager, SupabaseManager
 
 # Try to import query optimizer (optional)
 try:
@@ -834,7 +834,7 @@ async def execute_schedule_manually(schedule_id: str):
             
             # Auto-deactivate schedule if no leads exist
             try:
-                from helper.supabase_helper import ScheduleManager
+                from helper.postgres_helper import ScheduleManager
                 schedule_manager = ScheduleManager()
                 schedule_manager.update_schedule_status(schedule_id, False)
                 print(f"✅ Auto-deactivated schedule '{schedule['name']}' - no leads found")
@@ -861,7 +861,7 @@ async def execute_schedule_manually(schedule_id: str):
         if not needs_processing:
             # Auto-deactivate schedule if no leads need processing
             try:
-                from helper.supabase_helper import ScheduleManager
+                from helper.postgres_helper import ScheduleManager
                 schedule_manager = ScheduleManager()
                 schedule_manager.update_schedule_status(schedule_id, False)
                 print(f"✅ Auto-deactivated schedule '{schedule['name']}' - all leads complete")
@@ -2000,7 +2000,7 @@ async def stop_scraping():
             # Always deactivate schedule if it was running (both manual and automatic)
             if schedule_id:
                 try:
-                    from helper.supabase_helper import ScheduleManager
+                    from helper.postgres_helper import ScheduleManager
                     schedule_manager = ScheduleManager()
                     schedule_manager.update_schedule_status(schedule_id, False)
                     print(f"✅ Deactivated schedule: {schedule_name} (ID: {schedule_id})")

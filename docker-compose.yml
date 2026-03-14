@@ -1,0 +1,161 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with pgvector extension
+  postgres:
+    image: ankane/pgvector:latest
+    container_name: hrd_postgres
+    environment:
+      POSTGRES_DB: hrd_system
+      POSTGRES_USER: hrd_user
+      POSTGRES_PASSWORD: admin67
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hrd_user -d hrd_system"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - hrd_network
+
+  # RabbitMQ for message queue
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: hrd_rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - hrd_network
+
+  # API Service (FastAPI)
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: hrd_api
+    environment:
+      # Database
+      DATABASE_URL: postgresql://hrd_user:hrd_password_change_me@postgres:5432/hrd_system
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: hrd_system
+      POSTGRES_USER: hrd_user
+      POSTGRES_PASSWORD: admin67
+      
+      # RabbitMQ
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASS: guest
+      RABBITMQ_VHOST: /
+      
+      # API Settings
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - hrd_network
+    volumes:
+      - ./api:/app
+
+  # Crawler Service - DISABLED (run locally instead)
+  # Crawler butuh browser (Selenium), lebih baik jalan di local
+  # Untuk jalankan crawler:
+  # 1. cd crawler
+  # 2. python -m venv venv
+  # 3. source venv/bin/activate  # atau venv\Scripts\activate di Windows
+  # 4. pip install -r requirements.txt
+  # 5. python crawler_consumer.py
+  
+  # crawler:
+  #   build:
+  #     context: ./crawler
+  #     dockerfile: Dockerfile
+  #   container_name: hrd_crawler
+  #   environment:
+  #     POSTGRES_HOST: localhost  # Ganti ke localhost karena jalan di host
+  #     POSTGRES_PORT: 5432
+  #     POSTGRES_DB: hrd_system
+  #     POSTGRES_USER: hrd_user
+  #     POSTGRES_PASSWORD: hrd_password_change_me
+  #     
+  #     RABBITMQ_HOST: localhost
+  #     RABBITMQ_PORT: 5672
+  #     RABBITMQ_USER: guest
+  #     RABBITMQ_PASS: guest
+  #     RABBITMQ_VHOST: /
+  #     RABBITMQ_QUEUE: linkedin_profiles
+  #     
+  #     LINKEDIN_EMAIL: ${LINKEDIN_EMAIL}
+  #     LINKEDIN_PASSWORD: ${LINKEDIN_PASSWORD}
+  #   networks:
+  #     - hrd_network
+
+  # Scoring Service - OPTIONAL (bisa jalan di Docker atau local)
+  scoring:
+    build:
+      context: ./scoring
+      dockerfile: Dockerfile
+    container_name: hrd_scoring
+    environment:
+      # Database
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: hrd_system
+      POSTGRES_USER: hrd_user
+      POSTGRES_PASSWORD: hrd_password_change_me
+      
+      # RabbitMQ
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASS: guest
+      RABBITMQ_VHOST: /
+      SCORING_QUEUE: scoring_queue
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - hrd_network
+    volumes:
+      - ./scoring/data:/app/data
+      - ./scoring/requirements:/app/requirements
+
+volumes:
+  postgres_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+
+networks:
+  hrd_network:
+    driver: bridge

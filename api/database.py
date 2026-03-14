@@ -1,78 +1,39 @@
 """
-Database handler for scheduler using Supabase
+Database handler for scheduler using PostgreSQL
 """
 import os
 from typing import Optional, Dict, List, Any
 from datetime import datetime
-from supabase import create_client, Client
+import psycopg2
+from psycopg2.extras import RealDictCursor, Json
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
+def get_db_connection():
+    """Get database connection"""
+    return psycopg2.connect(
+        host=os.getenv('POSTGRES_HOST', 'localhost'),
+        port=os.getenv('POSTGRES_PORT', '5432'),
+        database=os.getenv('POSTGRES_DB', 'hrd_system'),
+        user=os.getenv('POSTGRES_USER', 'hrd_user'),
+        password=os.getenv('POSTGRES_PASSWORD', 'hrd_password_change_me')
+    )
+
+
 class Database:
     def __init__(self):
-        supabase_url = os.getenv("SUPABASE_URL")
-        supabase_key = os.getenv("SUPABASE_KEY")
-        
-        if not supabase_url or not supabase_key:
-            raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in .env")
-        
-        self.client: Client = create_client(supabase_url, supabase_key)
+        # Test connection
+        try:
+            conn = get_db_connection()
+            conn.close()
+        except Exception as e:
+            raise ValueError(f"Failed to connect to PostgreSQL: {e}")
     
     def init_db(self):
-        """
-        Initialize database tables
-        Run this SQL in Supabase SQL Editor:
-        
-        -- Schedules table
-        CREATE TABLE IF NOT EXISTS crawler_schedules (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            name TEXT NOT NULL,
-            start_schedule TEXT NOT NULL,
-            stop_schedule TEXT,
-            status TEXT DEFAULT 'active',
-            profile_urls JSONB DEFAULT '[]'::jsonb,
-            max_workers INTEGER DEFAULT 3,
-            last_run TIMESTAMPTZ,
-            next_run TIMESTAMPTZ,
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            updated_at TIMESTAMPTZ DEFAULT NOW()
-        );
-        
-        -- Crawl history table
-        CREATE TABLE IF NOT EXISTS crawler_history (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            schedule_id UUID REFERENCES crawler_schedules(id) ON DELETE CASCADE,
-            profile_url TEXT NOT NULL,
-            status TEXT NOT NULL,
-            started_at TIMESTAMPTZ DEFAULT NOW(),
-            completed_at TIMESTAMPTZ,
-            error_message TEXT,
-            output_file TEXT
-        );
-        
-        -- Indexes
-        CREATE INDEX IF NOT EXISTS idx_schedules_status ON crawler_schedules(status);
-        CREATE INDEX IF NOT EXISTS idx_history_schedule ON crawler_history(schedule_id);
-        CREATE INDEX IF NOT EXISTS idx_history_status ON crawler_history(status);
-        
-        -- RLS Policies (optional, adjust based on your needs)
-        ALTER TABLE crawler_schedules ENABLE ROW LEVEL SECURITY;
-        ALTER TABLE crawler_history ENABLE ROW LEVEL SECURITY;
-        
-        -- Allow service role to do everything
-        CREATE POLICY "Service role can do everything on schedules"
-            ON crawler_schedules FOR ALL
-            USING (true)
-            WITH CHECK (true);
-            
-        CREATE POLICY "Service role can do everything on history"
-            ON crawler_history FOR ALL
-            USING (true)
-            WITH CHECK (true);
-        """
-        print("✓ Database schema ready (run SQL in Supabase if tables don't exist)")
+        """Database schema is initialized via init-db/01-init.sql on container startup"""
+        print("✓ Database schema ready (auto-initialized via Docker)")
     
     def create_schedule(
         self,
@@ -83,74 +44,122 @@ class Database:
         max_workers: int = 3
     ) -> str:
         """Create new schedule"""
-        data = {
-            "name": name,
-            "start_schedule": start_schedule,
-            "stop_schedule": stop_schedule,
-            "status": "active",
-            "profile_urls": profile_urls or [],
-            "max_workers": max_workers,
-            "updated_at": datetime.now().isoformat()
-        }
-        
-        result = self.client.table("crawler_schedules").insert(data).execute()
-        
-        if not result.data:
-            raise Exception("Failed to create schedule")
-        
-        return result.data[0]["id"]
+        conn = get_db_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    INSERT INTO crawler_schedules 
+                    (name, start_schedule, stop_schedule, status, profile_urls, max_workers)
+                    VALUES (%s, %s, %s, 'active', %s, %s)
+                    RETURNING id
+                """, (name, start_schedule, stop_schedule, Json(profile_urls or []), max_workers))
+                
+                result = cur.fetchone()
+                conn.commit()
+                
+                if not result:
+                    raise Exception("Failed to create schedule")
+                
+                return str(result['id'])
+        finally:
+            conn.close()
     
     def get_schedule(self, schedule_id: str) -> Optional[Dict[str, Any]]:
         """Get schedule by ID"""
-        result = self.client.table("crawler_schedules").select("*").eq("id", schedule_id).execute()
-        
-        if not result.data:
-            return None
-        
-        schedule = result.data[0]
-        
-        # Ensure template_id exists (required for scheduler)
-        if 'template_id' not in schedule or not schedule['template_id']:
-            print(f"⚠️ Schedule {schedule_id} missing template_id")
-            return None
-        
-        return schedule
+        conn = get_db_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM crawler_schedules WHERE id = %s", (schedule_id,))
+                schedule = cur.fetchone()
+                
+                if not schedule:
+                    return None
+                
+                schedule_dict = dict(schedule)
+                
+                # Ensure template_id exists
+                if 'template_id' not in schedule_dict or not schedule_dict['template_id']:
+                    print(f"⚠️ Schedule {schedule_id} missing template_id")
+                    return None
+                
+                return schedule_dict
+        finally:
+            conn.close()
     
     def get_all_schedules(self) -> List[Dict[str, Any]]:
         """Get all schedules"""
-        result = self.client.table("crawler_schedules").select("*").order("created_at", desc=True).execute()
-        return result.data or []
+        conn = get_db_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM crawler_schedules ORDER BY created_at DESC")
+                schedules = cur.fetchall()
+            return [dict(row) for row in schedules]
+        finally:
+            conn.close()
     
     def get_active_schedules(self) -> List[Dict[str, Any]]:
         """Get only active schedules"""
-        result = self.client.table("crawler_schedules").select("*").eq("status", "active").execute()
-        schedules = result.data or []
-        
-        # Filter out schedules without template_id
-        valid_schedules = [s for s in schedules if s.get('template_id')]
-        
-        if len(schedules) != len(valid_schedules):
-            print(f"⚠️ Filtered out {len(schedules) - len(valid_schedules)} schedules without template_id")
-        
-        return valid_schedules
+        conn = get_db_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("SELECT * FROM crawler_schedules WHERE status = 'active'")
+                schedules = cur.fetchall()
+            
+            schedules_list = [dict(row) for row in schedules]
+            
+            # Filter out schedules without template_id
+            valid_schedules = [s for s in schedules_list if s.get('template_id')]
+            
+            if len(schedules_list) != len(valid_schedules):
+                print(f"⚠️ Filtered out {len(schedules_list) - len(valid_schedules)} schedules without template_id")
+            
+            return valid_schedules
+        finally:
+            conn.close()
     
     def update_schedule(self, schedule_id: str, updates: Dict[str, Any]):
         """Update schedule"""
-        updates["updated_at"] = datetime.now().isoformat()
-        
-        result = self.client.table("crawler_schedules").update(updates).eq("id", schedule_id).execute()
-        
-        if not result.data:
-            raise Exception(f"Schedule {schedule_id} not found")
+        conn = get_db_connection()
+        try:
+            # Build SET clause
+            set_parts = []
+            values = []
+            for key, value in updates.items():
+                set_parts.append(f"{key} = %s")
+                values.append(value)
+            
+            # Add updated_at
+            set_parts.append("updated_at = %s")
+            values.append(datetime.now())
+            values.append(schedule_id)
+            
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    UPDATE crawler_schedules 
+                    SET {', '.join(set_parts)}
+                    WHERE id = %s
+                """, values)
+                
+                if cur.rowcount == 0:
+                    raise Exception(f"Schedule {schedule_id} not found")
+                
+                conn.commit()
+        finally:
+            conn.close()
     
     def delete_schedule(self, schedule_id: str):
         """Delete schedule (cascade will delete history)"""
-        self.client.table("crawler_schedules").delete().eq("id", schedule_id).execute()
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM crawler_schedules WHERE id = %s", (schedule_id,))
+                conn.commit()
+        finally:
+            conn.close()
     
     def update_last_run(self, schedule_id: str):
         """Update last run timestamp"""
-        now = datetime.now().isoformat()
-        self.update_schedule(schedule_id, {"last_run": now})
+        self.update_schedule(schedule_id, {"last_run": datetime.now()})
     
     def add_crawl_history(
         self,
@@ -161,30 +170,53 @@ class Database:
         output_file: Optional[str] = None
     ) -> str:
         """Add crawl history entry"""
-        data = {
-            "schedule_id": schedule_id,
-            "profile_url": profile_url,
-            "status": status,
-            "error_message": error_message,
-            "output_file": output_file
-        }
-        
-        if status in ["completed", "failed"]:
-            data["completed_at"] = datetime.now().isoformat()
-        
-        result = self.client.table("crawler_history").insert(data).execute()
-        
-        if not result.data:
-            raise Exception("Failed to create crawl history")
-        
-        return result.data[0]["id"]
+        conn = get_db_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                completed_at = datetime.now() if status in ["completed", "failed"] else None
+                
+                cur.execute("""
+                    INSERT INTO crawler_history 
+                    (schedule_id, profile_url, status, error_message, output_file, completed_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (schedule_id, profile_url, status, error_message, output_file, completed_at))
+                
+                result = cur.fetchone()
+                conn.commit()
+                
+                if not result:
+                    raise Exception("Failed to create crawl history")
+                
+                return str(result['id'])
+        finally:
+            conn.close()
     
     def update_crawl_history(self, history_id: str, updates: Dict[str, Any]):
         """Update crawl history"""
-        if "status" in updates and updates["status"] in ["completed", "failed"]:
-            updates["completed_at"] = datetime.now().isoformat()
-        
-        self.client.table("crawler_history").update(updates).eq("id", history_id).execute()
+        conn = get_db_connection()
+        try:
+            if "status" in updates and updates["status"] in ["completed", "failed"]:
+                updates["completed_at"] = datetime.now()
+            
+            # Build SET clause
+            set_parts = []
+            values = []
+            for key, value in updates.items():
+                set_parts.append(f"{key} = %s")
+                values.append(value)
+            
+            values.append(history_id)
+            
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    UPDATE crawler_history 
+                    SET {', '.join(set_parts)}
+                    WHERE id = %s
+                """, values)
+                conn.commit()
+        finally:
+            conn.close()
     
     def get_crawl_history(
         self,
@@ -192,42 +224,61 @@ class Database:
         limit: int = 100
     ) -> List[Dict[str, Any]]:
         """Get crawl history"""
-        query = self.client.table("crawler_history").select("*")
-        
-        if schedule_id:
-            query = query.eq("schedule_id", schedule_id)
-        
-        result = query.order("started_at", desc=True).limit(limit).execute()
-        return result.data or []
+        conn = get_db_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                if schedule_id:
+                    cur.execute("""
+                        SELECT * FROM crawler_history 
+                        WHERE schedule_id = %s
+                        ORDER BY started_at DESC
+                        LIMIT %s
+                    """, (schedule_id, limit))
+                else:
+                    cur.execute("""
+                        SELECT * FROM crawler_history 
+                        ORDER BY started_at DESC
+                        LIMIT %s
+                    """, (limit,))
+                
+                history = cur.fetchall()
+            return [dict(row) for row in history]
+        finally:
+            conn.close()
     
     def get_stats(self) -> Dict[str, Any]:
         """Get crawler statistics"""
-        # Total schedules
-        schedules_result = self.client.table("crawler_schedules").select("id", count="exact").execute()
-        total_schedules = schedules_result.count or 0
-        
-        # Active schedules
-        active_result = self.client.table("crawler_schedules").select("id", count="exact").eq("status", "active").execute()
-        active_schedules = active_result.count or 0
-        
-        # Total crawls
-        crawls_result = self.client.table("crawler_history").select("id", count="exact").execute()
-        total_crawls = crawls_result.count or 0
-        
-        # Successful crawls
-        success_result = self.client.table("crawler_history").select("id", count="exact").eq("status", "completed").execute()
-        successful_crawls = success_result.count or 0
-        
-        # Failed crawls
-        failed_result = self.client.table("crawler_history").select("id", count="exact").eq("status", "failed").execute()
-        failed_crawls = failed_result.count or 0
-        
-        return {
-            "total_schedules": total_schedules,
-            "active_schedules": active_schedules,
-            "paused_schedules": total_schedules - active_schedules,
-            "total_crawls": total_crawls,
-            "successful_crawls": successful_crawls,
-            "failed_crawls": failed_crawls,
-            "success_rate": round(successful_crawls / total_crawls * 100, 1) if total_crawls > 0 else 0
-        }
+        conn = get_db_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # Total schedules
+                cur.execute("SELECT COUNT(*) as count FROM crawler_schedules")
+                total_schedules = cur.fetchone()['count']
+                
+                # Active schedules
+                cur.execute("SELECT COUNT(*) as count FROM crawler_schedules WHERE status = 'active'")
+                active_schedules = cur.fetchone()['count']
+                
+                # Total crawls
+                cur.execute("SELECT COUNT(*) as count FROM crawler_history")
+                total_crawls = cur.fetchone()['count']
+                
+                # Successful crawls
+                cur.execute("SELECT COUNT(*) as count FROM crawler_history WHERE status = 'completed'")
+                successful_crawls = cur.fetchone()['count']
+                
+                # Failed crawls
+                cur.execute("SELECT COUNT(*) as count FROM crawler_history WHERE status = 'failed'")
+                failed_crawls = cur.fetchone()['count']
+            
+            return {
+                "total_schedules": total_schedules,
+                "active_schedules": active_schedules,
+                "paused_schedules": total_schedules - active_schedules,
+                "total_crawls": total_crawls,
+                "successful_crawls": successful_crawls,
+                "failed_crawls": failed_crawls,
+                "success_rate": round(successful_crawls / total_crawls * 100, 1) if total_crawls > 0 else 0
+            }
+        finally:
+            conn.close()

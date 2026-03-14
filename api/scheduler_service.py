@@ -62,7 +62,7 @@ class SchedulerService:
     
     def _load_schedules(self):
         """Load all active schedules from database"""
-        from helper.supabase_helper import ScheduleManager
+        from helper.postgres_helper import ScheduleManager
         
         # Get active schedules using ScheduleManager
         schedules = ScheduleManager.get_all_simple()
@@ -81,7 +81,7 @@ class SchedulerService:
     def add_job(self, schedule_id: str):
         """Add job to scheduler with conflict detection"""
         # Use ScheduleManager instead of db to avoid connection issues
-        from helper.supabase_helper import ScheduleManager
+        from helper.postgres_helper import ScheduleManager
          
         schedule = ScheduleManager.get_by_id(schedule_id)
         if not schedule:
@@ -313,14 +313,18 @@ class SchedulerService:
     def log_execution(self, schedule_id: str, status: str, leads_queued: int = 0, error_message: str = None):
         """Simple logging to database"""
         try:
-            from helper.supabase_helper import supabase
+            import psycopg2
+            from psycopg2.extras import Json
+            from helper.postgres_helper import get_db_connection
             
-            supabase.table('scheduler_logs').insert({
-                'schedule_id': schedule_id,
-                'status': status,
-                'leads_queued': leads_queued,
-                'error_message': error_message
-            }).execute()
+            conn = get_db_connection()
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO scheduler_logs (schedule_id, status, leads_queued, error_message)
+                    VALUES (%s, %s, %s, %s)
+                """, (schedule_id, status, leads_queued, error_message))
+                conn.commit()
+            conn.close()
             
             print(f"📝 Logged: {status} - {leads_queued} leads")
             
@@ -378,7 +382,7 @@ class SchedulerService:
         time.sleep(stagger_delay)
         
         # CRITICAL: Import fresh in thread to avoid connection issues
-        from helper.supabase_helper import SupabaseManager
+        from helper.postgres_helper import SupabaseManager
         from helper.rabbitmq_helper import queue_publisher
         
         # Create fresh Supabase manager for this thread
@@ -430,7 +434,7 @@ class SchedulerService:
             
             # Auto-deactivate schedule if no leads exist
             try:
-                from helper.supabase_helper import ScheduleManager
+                from helper.postgres_helper import ScheduleManager
                 schedule_manager = ScheduleManager()
                 schedule_manager.update_schedule_status(schedule_id, False)
                 print(f"✅ Auto-deactivated schedule - no leads found")
@@ -447,7 +451,7 @@ class SchedulerService:
             
             # Auto-deactivate schedule if no leads need processing
             try:
-                from helper.supabase_helper import ScheduleManager
+                from helper.postgres_helper import ScheduleManager
                 schedule_manager = ScheduleManager()
                 schedule_manager.update_schedule_status(schedule_id, False)
                 print(f"✅ Auto-deactivated schedule - all leads complete")
