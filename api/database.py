@@ -2,11 +2,14 @@
 Database handler for scheduler using PostgreSQL
 """
 import os
+import psycopg2
+import psycopg2.extras
 from typing import Optional, Dict, List, Any
 from datetime import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor, Json
 from dotenv import load_dotenv
+import json
 
 load_dotenv()
 
@@ -41,9 +44,31 @@ class Database:
         start_schedule: str,
         stop_schedule: Optional[str] = None,
         profile_urls: List[str] = None,
-        max_workers: int = 3
+        max_workers: int = 3,
+        template_id: Optional[str] = None,
+        external_source: Optional[str] = None,
+        webhook_url: Optional[str] = None
     ) -> str:
         """Create new schedule"""
+        conn = self._get_connection()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    INSERT INTO crawler_schedules 
+                    (name, template_id, start_schedule, stop_schedule, status, profile_urls, max_workers, external_source, webhook_url, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    name, template_id, start_schedule, stop_schedule, 'active',
+                    json.dumps(profile_urls or []), max_workers, external_source, webhook_url,
+                    datetime.now()
+                ))
+                
+                result = cur.fetchone()
+                conn.commit()
+                return str(result['id'])
+        finally:
+            conn.close()
         conn = get_db_connection()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -159,6 +184,7 @@ class Database:
     
     def update_last_run(self, schedule_id: str):
         """Update last run timestamp"""
+        self.update_schedule(schedule_id, {"last_run": datetime.now()})
         self.update_schedule(schedule_id, {"last_run": datetime.now()})
     
     def add_crawl_history(
