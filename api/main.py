@@ -1,10 +1,11 @@
 """
 FastAPI Backend for LinkedIn Crawler Scheduler
 """
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 import asyncio
 import pytz
@@ -23,18 +24,22 @@ sys.path.append(str(Path(__file__).parent.parent / "crawler"))
 from scheduler_service import SchedulerService
 from database import Database
 from helper.rabbitmq_helper import queue_publisher
-from helper.postgres_helper import ScheduleManager, LeadsManager, SupabaseManager
+from helper.postgres_helper import ScheduleManager, LeadsManager
+from helper.auth_helper import hash_password, verify_password, create_jwt_token, verify_jwt_token, get_token_from_header
+# Remove Supabase imports - migrating to PostgreSQL
+# from helper.postgres_helper import ScheduleManager, LeadsManager, SupabaseManager
 
-# Try to import query optimizer (optional)
+# Try to import query optimizer (optional) - will be updated for PostgreSQL later
 try:
-    from helper.query_optimizer import QueryOptimizer
-    query_optimizer = QueryOptimizer(supabase)
-    QUERY_OPTIMIZER_AVAILABLE = True
-    print("✓ Query optimizer loaded")
+    # from helper.query_optimizer import QueryOptimizer
+    # query_optimizer = QueryOptimizer(supabase)
+    query_optimizer = None
+    QUERY_OPTIMIZER_AVAILABLE = False
+    print("⚠ Query optimizer disabled during PostgreSQL migration")
 except ImportError:
     query_optimizer = None
     QUERY_OPTIMIZER_AVAILABLE = False
-    print("⚠ Query optimizer not available, using standard queries")
+    print("⚠ Query optimizer not available")
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -127,6 +132,53 @@ app.add_middleware(
 db = None
 scheduler = None
 background_task_running = False
+
+# Security
+security = HTTPBearer()
+
+# Current crawl session tracking
+current_crawl_session = {
+    'is_running': False,
+    'template_id': None,
+    'template_name': None,
+    'started_at': None,
+    'leads_queued': 0
+}
+
+# ============================================================================
+# PYDANTIC MODELS
+# ============================================================================
+
+# Auth Models
+class LoginRequest(BaseModel):
+    email: str = Field(..., json_schema_extra={"example": "admin@hrd.com"})
+    password: str = Field(..., json_schema_extra={"example": "admin123"})
+
+class LoginResponse(BaseModel):
+    success: bool
+    token: str
+    user: Dict[str, Any]
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    name: Optional[str]
+    role: str
+    created_at: str
+
+# Stats Models
+class DashboardStats(BaseModel):
+    leads_count: int
+    templates_count: int
+    companies_count: int
+    schedules_count: int
+    leads_by_status: Dict[str, int]
+    recent_leads: List[Dict[str, Any]]
+
+# Company Models
+class CompanyCreate(BaseModel):
+    name: str = Field(..., json_schema_extra={"example": "PT Example"})
+    code: Optional[str] = Field(None, json_schema_extra={"example": "EXAMPLE"})
 
 async def session_monitor_task():
     """Background task to monitor session completion"""
@@ -464,25 +516,21 @@ async def get_schedules(external_source: Optional[str] = None):
         print(f"\n📋 SCHEDULES REQUEST")
         print(f"   External source filter: {external_source}")
         
-        # Build query - use simple approach for production stability
-        query = supabase.table('crawler_schedules').select('*')
+        # Use PostgreSQL Database class instead of Supabase
+        schedules = db.get_all_schedules()
         
         # Filter by external_source
         if external_source == "internal":
             # Internal schedules only (external_source is NULL)
-            query = query.is_('external_source', 'null')
+            schedules = [s for s in schedules if not s.get('external_source')]
         elif external_source == "external":
             # All external schedules (external_source is NOT NULL)
-            query = query.not_.is_('external_source', 'null')
+            schedules = [s for s in schedules if s.get('external_source')]
         elif external_source:
             # Specific external source (e.g., "nara")
-            query = query.eq('external_source', external_source)
+            schedules = [s for s in schedules if s.get('external_source') == external_source]
         # If external_source is None, return all schedules
         
-        # Apply ordering
-        result = query.order('created_at', desc=True).execute()
-        
-        schedules = result.data or []
         print(f"   Found {len(schedules)} schedules")
         
         # Format response based on external_source
@@ -510,9 +558,9 @@ async def get_schedules(external_source: Optional[str] = None):
                     "external_metadata": external_metadata,
                     "webhook_url": schedule.get('webhook_url'),
                     # Additional external fields for compatibility
-                    "job_title": external_metadata.get('job_title'),
+                    "job_title": external_metadata.get('job_title') if isinstance(external_metadata, dict) else None,
                     "execution_status": execution_status,
-                    "scheduled_for": external_metadata.get('schedule_datetime')
+                    "scheduled_for": external_metadata.get('schedule_datetime') if isinstance(external_metadata, dict) else None
                 }
                 
                 print(f"🌐 External schedule: {schedule['name']} (ID: {schedule['id']})")
@@ -574,8 +622,8 @@ async def create_schedule(schedule: CrawlerScheduleCreate):
                 )
         
         # Validate template exists
-        template_result = supabase.table('search_templates').select('id, name').eq('id', schedule.template_id).execute()
-        if not template_result.data:
+        template = db.get_template_by_id(schedule.template_id)
+        if not template:
             raise HTTPException(status_code=404, detail=f"Template with ID {schedule.template_id} not found")
         
         # Create schedule with template_id
@@ -636,8 +684,8 @@ async def update_schedule(schedule_id: str, schedule: CrawlerScheduleUpdate):
         
         # Validate template if provided
         if 'template_id' in update_data:
-            template_result = supabase.table('search_templates').select('id, name').eq('id', update_data['template_id']).execute()
-            if not template_result.data:
+            template = db.get_template_by_id(update_data['template_id'])
+            if not template:
                 raise HTTPException(status_code=404, detail=f"Template with ID {update_data['template_id']} not found")
         
         # Update schedule
@@ -784,13 +832,11 @@ async def execute_schedule_manually(schedule_id: str):
             }
         
         # Get schedule details
-        result = supabase.table("crawler_schedules").select("*").eq("id", schedule_id).execute()
+        schedule = db.get_schedule(schedule_id)
         
-        if not result.data:
+        if not schedule:
             print(f"❌ Schedule not found: {schedule_id}")
             raise HTTPException(status_code=404, detail="Schedule not found")
-        
-        schedule = result.data[0]
         template_id = schedule.get("template_id")
         
         print(f"📋 Manual execution for schedule: {schedule.get('name')}")
@@ -810,14 +856,9 @@ async def execute_schedule_manually(schedule_id: str):
         print(f"📋 Manual execution for schedule: {schedule.get('name')}")
         print(f"📋 Template ID: {template_id}")
         
-        # Create supabase manager instance
-        supabase_manager = SupabaseManager()
-        
-        print(f"🔍 Getting leads for template: {template_id}")
-        
         # Get leads for this template
         try:
-            leads = supabase_manager.get_leads_by_template_id(template_id)
+            leads = db.get_leads_by_template_id(template_id)
             print(f"📊 Found {len(leads) if leads else 0} leads for template")
         except Exception as e:
             print(f"❌ Error getting leads: {e}")
@@ -937,11 +978,10 @@ async def start_scraping(request: ScrapingRequest):
     
     try:
         from helper.rabbitmq_helper import queue_publisher
-        from helper.supabase_helper import SupabaseManager
+        # Remove Supabase import - using PostgreSQL Database class now
         
         # Get template details first
-        supabase_manager = SupabaseManager()
-        template = supabase_manager.get_template_by_id(request.template_id)
+        template = db.get_template_by_id(request.template_id)
         
         if not template:
             return ScrapingResponse(
@@ -954,7 +994,7 @@ async def start_scraping(request: ScrapingRequest):
         template_name = template.get('name', 'Unknown Template')
         
         # Get leads that need processing
-        leads = supabase_manager.get_leads_by_template_id(request.template_id)
+        leads = db.get_leads_by_template_id(request.template_id)
         
         if not leads:
             return ScrapingResponse(
@@ -1011,9 +1051,8 @@ async def start_scraping(request: ScrapingRequest):
 async def analyze_lead(template_id: str):
     """Analyze lead completion for template"""
     try:
-        # Use SupabaseManager to get leads with proper validation logic
-        supabase_manager = SupabaseManager()
-        leads = supabase_manager.get_leads_by_template_id(template_id)
+        # Use Database to get leads with proper validation logic
+        leads = db.get_leads_by_template_id(template_id)
         
         if not leads:
             return {
@@ -1098,40 +1137,23 @@ async def get_templates():
     try:
         print("📥 Fetching templates...")
         
-        # Test supabase connection first
-        if not supabase:
-            print("❌ Supabase client not initialized")
-            return {
-                "success": False,
-                "templates": [],
-                "error": "Supabase client not initialized"
-            }
+        # Use PostgreSQL Database class instead of Supabase
+        templates = db.get_all_templates()
         
-        # Use query optimizer if available, otherwise fallback
-        if QUERY_OPTIMIZER_AVAILABLE and query_optimizer:
-            print("   Using optimized query with caching...")
-            templates = query_optimizer.get_templates_optimized(
-                use_cache=True,
-                cache_ttl=300  # 5 minutes
-            )
-        else:
-            print("   Using standard query...")
-            # Fallback to standard query
-            try:
-                result = supabase.rpc('get_search_templates').execute()
-                print(f"✅ Templates via RPC: {len(result.data) if result.data else 0}")
-            except:
-                # Fallback to direct query
-                result = supabase.table('search_templates').select('id, name, created_at').execute()
-                print(f"✅ Templates via direct query: {len(result.data) if result.data else 0}")
-            
-            templates = result.data or []
+        # Format templates for compatibility
+        formatted_templates = []
+        for template in templates:
+            formatted_templates.append({
+                'id': template['id'],
+                'name': template['name'],
+                'created_at': template['created_at']
+            })
         
-        print(f"✅ Templates fetched: {len(templates)}")
+        print(f"✅ Templates fetched: {len(formatted_templates)}")
         
         return {
             "success": True,
-            "templates": templates
+            "templates": formatted_templates
         }
     except Exception as e:
         print(f"❌ Error fetching templates: {str(e)}")
@@ -1217,27 +1239,26 @@ async def generate_and_save_requirements(request: RequirementsGenerateRequest):
             template_name = f"{request.position} - Auto Generated"
             
             # Check if template already exists
-            existing_template = supabase.table("search_templates").select("id").eq("name", template_name).execute()
+            existing_template = db.get_template_by_name(template_name)
             
-            if existing_template.data:
+            if existing_template:
                 # Update existing template
-                template_id = existing_template.data[0]['id']
-                result = supabase.table("search_templates").update({
+                template_id = existing_template['id']
+                db.update_template(template_id, {
                     "requirements": requirements_array
-                }).eq("id", template_id).execute()
+                })
                 
-                if result.data:
-                    print(f"✅ Updated existing template: {template_name}")
-                    print(f"💾 Template ID: {template_id}")
-                    
-                    return {
-                        'success': True,
-                        'requirements': requirements,
-                        'total_requirements': len(requirements_array),
-                        'source': 'requirements_generator.py',
-                        'template_id': template_id,
-                        'template_name': template_name,
-                        'action': 'updated',
+                print(f"✅ Updated existing template: {template_name}")
+                print(f"💾 Template ID: {template_id}")
+                
+                return {
+                    'success': True,
+                    'requirements': requirements,
+                    'total_requirements': len(requirements_array),
+                    'source': 'requirements_generator.py',
+                    'template_id': template_id,
+                    'template_name': template_name,
+                    'action': 'updated',
                         'message': f'Requirements updated in template: {template_name}'
                     }
             else:
@@ -1250,23 +1271,21 @@ async def generate_and_save_requirements(request: RequirementsGenerateRequest):
                     "created_at": datetime.utcnow().isoformat()
                 }
                 
-                result = supabase.table("search_templates").insert(template_data).execute()
+                template_id = db.create_template(template_data)
                 
-                if result.data:
-                    template_id = result.data[0]['id']
-                    print(f"✅ Created new template: {template_name}")
-                    print(f"💾 Template ID: {template_id}")
-                    
-                    return {
-                        'success': True,
-                        'requirements': requirements,
-                        'total_requirements': len(requirements_array),
-                        'source': 'requirements_generator.py',
-                        'template_id': template_id,
-                        'template_name': template_name,
-                        'action': 'created',
-                        'message': f'Requirements saved in new template: {template_name}'
-                    }
+                print(f"✅ Created new template: {template_name}")
+                print(f"💾 Template ID: {template_id}")
+                
+                return {
+                    'success': True,
+                    'requirements': requirements,
+                    'total_requirements': len(requirements_array),
+                    'source': 'requirements_generator.py',
+                    'template_id': template_id,
+                    'template_name': template_name,
+                    'action': 'created',
+                    'message': f'Requirements saved in new template: {template_name}'
+                }
             
             raise Exception("Failed to save to database")
                 
@@ -1556,27 +1575,19 @@ async def create_external_schedule(request: ExternalScheduleRequest):
             print(f"📊 Template data: {template_data}")
             
             # Insert to search_templates table
-            result = supabase.table("search_templates").insert(template_data).execute()
+            template_id = db.create_template(template_data)
             
-            print(f"📊 Insert result: {result}")
-            print(f"📊 Result data: {result.data}")
-            print(f"📊 Result count: {result.count}")
+            print(f"📊 Created template with ID: {template_id}")
             
-            if result.data and len(result.data) > 0:
-                template_created = True
-                created_template = result.data[0]
-                print(f"✅ Created search template successfully!")
-                print(f"   ID: {created_template.get('id')}")
-                print(f"   Name: {created_template.get('name')}")
-                
-                # Verify template was actually saved
-                verify_result = supabase.table("search_templates").select("*").eq("id", template_id).execute()
-                print(f"🔍 Verification result: {verify_result.data}")
-                
-            else:
-                print(f"⚠️ Failed to create search template - no data returned")
-                print(f"📊 Full result: {result}")
-                
+            template_created = True
+            print(f"✅ Created search template successfully!")
+            print(f"   ID: {template_id}")
+            print(f"   Name: {template_data.get('name')}")
+            
+            # Verify template was actually saved
+            verify_result = db.get_template_by_id(template_id)
+            print(f"🔍 Verification result: {verify_result}")
+            
         except Exception as e:
             print(f"❌ Template creation failed with exception: {e}")
             print(f"📊 Template data attempted: {template_data}")
@@ -1722,23 +1733,18 @@ async def create_external_schedule(request: ExternalScheduleRequest):
                     }
                     
                     # Update the template that was created earlier with requirements
-                    result = supabase.table("search_templates").update({
+                    db.update_template(template_id, {
                         "requirements": requirements_to_save
-                    }).eq("id", template_id).execute()
+                    })
                     
-                    if result.data:
-                        requirements_generated = True
-                        print(f"✅ Generated {len(requirements_array)} requirements")
-                        print(f"✅ Updated template {template_id} with requirements")
-                        print(f"📊 Method used: {method_used}")
-                        
-                        # Update requirements_data with template info
-                        requirements_data['template_id'] = template_id
-                        requirements_data['template_name'] = template_name
-                        
-                    else:
-                        print(f"❌ Failed to update template with requirements")
-                        requirements_generated = False
+                    requirements_generated = True
+                    print(f"✅ Generated {len(requirements_array)} requirements")
+                    print(f"✅ Updated template {template_id} with requirements")
+                    print(f"📊 Method used: {method_used}")
+                    
+                    # Update requirements_data with template info
+                    requirements_data['template_id'] = template_id
+                    requirements_data['template_name'] = template_name
                         
                 except Exception as db_error:
                     print(f"❌ Template update failed: {db_error}")
@@ -1811,21 +1817,16 @@ async def create_external_schedule(request: ExternalScheduleRequest):
                         'requirements': default_requirements
                     }
                     
-                    result = supabase.table("search_templates").update({
+                    db.update_template(template_id, {
                         "requirements": default_requirements_to_save
-                    }).eq("id", template_id).execute()
+                    })
                     
-                    if result.data:
-                        requirements_generated = True
-                        print(f"✅ Default requirements saved to template {template_id}")
-                        
-                        # Update requirements_data with template info
-                        requirements_data['template_id'] = template_id
-                        requirements_data['template_name'] = template_name
-                        
-                    else:
-                        print(f"❌ Failed to save default requirements to template")
-                        requirements_generated = False
+                    requirements_generated = True
+                    print(f"✅ Default requirements saved to template {template_id}")
+                    
+                    # Update requirements_data with template info
+                    requirements_data['template_id'] = template_id
+                    requirements_data['template_name'] = template_name
                         
                 except Exception as db_error:
                     print(f"❌ Template update failed for default requirements: {db_error}")
@@ -1886,13 +1887,13 @@ async def create_external_schedule(request: ExternalScheduleRequest):
         }
         
         # Insert schedule to database
-        result = supabase.table("crawler_schedules").insert(schedule_data).execute()
-        
-        if not result.data:
-            raise HTTPException(status_code=500, detail="Failed to create schedule")
-        
-        schedule = result.data[0]
-        schedule_id = schedule["id"]
+        schedule_id = db.create_schedule(
+            name=schedule_data['name'],
+            start_schedule=schedule_data['start_schedule'],
+            template_id=schedule_data['template_id'],
+            external_source=schedule_data['external_source'],
+            webhook_url=schedule_data.get('webhook_url')
+        )
         
         print(f"✅ Created schedule: {schedule_id}")
         
@@ -2237,3 +2238,335 @@ async def get_external_schedule_status(schedule_id: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# ============================================================================
+# AUTHENTICATION DEPENDENCY
+# ============================================================================
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Dependency to get current authenticated user"""
+    token = credentials.credentials
+    user_data = verify_jwt_token(token)
+    
+    if not user_data:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token"
+        )
+    
+    # Get fresh user data from database
+    user = db.get_user_by_id(user_data['user_id'])
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found"
+        )
+    
+    return user
+
+# ============================================================================
+# AUTHENTICATION ENDPOINTS
+# ============================================================================
+
+@app.post("/api/auth/login", tags=["Authentication"])
+async def login(request: LoginRequest):
+    """Login with email and password"""
+    try:
+        # Get user by email
+        user = db.get_user_by_email(request.email)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password"
+            )
+        
+        # Verify password
+        if not verify_password(request.password, user['password_hash']):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password"
+            )
+        
+        # Create JWT token
+        token = create_jwt_token(user)
+        
+        # Remove password hash from response
+        user_response = {
+            'id': user['id'],
+            'email': user['email'],
+            'name': user['name'],
+            'role': user['role'],
+            'created_at': user['created_at'].isoformat() if user['created_at'] else None
+        }
+        
+        return {
+            "success": True,
+            "token": token,
+            "user": user_response
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Login error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Login failed"
+        )
+
+@app.get("/api/auth/me", tags=["Authentication"])
+async def get_current_user_info(current_user: dict = Depends(get_current_user)):
+    """Get current user information"""
+    return {
+        "success": True,
+        "user": {
+            'id': current_user['id'],
+            'email': current_user['email'],
+            'name': current_user['name'],
+            'role': current_user['role'],
+            'created_at': current_user['created_at'].isoformat() if current_user['created_at'] else None
+        }
+    }
+
+@app.post("/api/auth/logout", tags=["Authentication"])
+async def logout():
+    """Logout (client-side token removal)"""
+    return {
+        "success": True,
+        "message": "Logged out successfully"
+    }
+
+# ============================================================================
+# DASHBOARD STATS ENDPOINTS
+# ============================================================================
+
+@app.get("/api/stats", tags=["Dashboard"])
+async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
+    """Get comprehensive dashboard statistics"""
+    try:
+        stats = db.get_dashboard_stats()
+        return {
+            "success": True,
+            "data": stats
+        }
+    except Exception as e:
+        print(f"❌ Stats error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
+
+@app.get("/api/stats/leads", tags=["Dashboard"])
+async def get_leads_count(current_user: dict = Depends(get_current_user)):
+    """Get total leads count"""
+    try:
+        count = db.get_leads_count()
+        return {
+            "success": True,
+            "count": count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get leads count: {str(e)}")
+
+@app.get("/api/stats/templates", tags=["Dashboard"])
+async def get_templates_count(current_user: dict = Depends(get_current_user)):
+    """Get total templates count"""
+    try:
+        count = db.get_templates_count()
+        return {
+            "success": True,
+            "count": count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get templates count: {str(e)}")
+
+@app.get("/api/stats/companies", tags=["Dashboard"])
+async def get_companies_count(current_user: dict = Depends(get_current_user)):
+    """Get total companies count"""
+    try:
+        count = db.get_companies_count()
+        return {
+            "success": True,
+            "count": count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get companies count: {str(e)}")
+
+# ============================================================================
+# LEADS ENDPOINTS
+# ============================================================================
+
+@app.get("/api/leads", tags=["Leads"])
+async def get_leads(
+    template_id: Optional[str] = None,
+    limit: Optional[int] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get all leads with optional filtering"""
+    try:
+        leads = db.get_all_leads(template_id=template_id, limit=limit)
+        return {
+            "success": True,
+            "count": len(leads),
+            "leads": leads
+        }
+    except Exception as e:
+        print(f"❌ Leads error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get leads: {str(e)}")
+
+@app.get("/api/leads/export", tags=["Leads"])
+async def export_leads(
+    template_id: Optional[str] = None,
+    format: str = "json",
+    current_user: dict = Depends(get_current_user)
+):
+    """Export leads data as JSON or CSV"""
+    try:
+        leads = db.get_all_leads(template_id=template_id)
+        
+        if format.lower() == "csv":
+            # Convert to CSV format
+            import csv
+            import io
+            
+            output = io.StringIO()
+            if leads:
+                writer = csv.DictWriter(output, fieldnames=leads[0].keys())
+                writer.writeheader()
+                writer.writerows(leads)
+            
+            return {
+                "success": True,
+                "format": "csv",
+                "data": output.getvalue(),
+                "count": len(leads)
+            }
+        else:
+            # Return as JSON
+            return {
+                "success": True,
+                "format": "json",
+                "data": leads,
+                "count": len(leads)
+            }
+            
+    except Exception as e:
+        print(f"❌ Export error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to export leads: {str(e)}")
+
+# ============================================================================
+# COMPANIES ENDPOINTS
+# ============================================================================
+
+@app.get("/api/companies", tags=["Companies"])
+async def get_companies(current_user: dict = Depends(get_current_user)):
+    """Get all companies"""
+    try:
+        companies = db.get_all_companies()
+        return {
+            "success": True,
+            "count": len(companies),
+            "companies": companies
+        }
+    except Exception as e:
+        print(f"❌ Companies error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get companies: {str(e)}")
+
+@app.post("/api/companies", tags=["Companies"])
+async def create_company(
+    company: CompanyCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Create new company"""
+    try:
+        company_id = db.create_company({
+            'name': company.name,
+            'code': company.code
+        })
+        
+        return {
+            "success": True,
+            "message": "Company created successfully",
+            "company_id": company_id
+        }
+    except Exception as e:
+        print(f"❌ Create company error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create company: {str(e)}")
+
+# ============================================================================
+# TEMPLATES CRUD ENDPOINTS
+# ============================================================================
+
+@app.get("/api/templates/{template_id}", tags=["Templates"])
+async def get_template(
+    template_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get single template by ID"""
+    try:
+        template = db.get_template_by_id(template_id)
+        if not template:
+            raise HTTPException(status_code=404, detail="Template not found")
+        
+        return {
+            "success": True,
+            "template": template
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Get template error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get template: {str(e)}")
+
+@app.delete("/api/templates/{template_id}", tags=["Templates"])
+async def delete_template(
+    template_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Delete template"""
+    try:
+        db.delete_template(template_id)
+        return {
+            "success": True,
+            "message": "Template deleted successfully"
+        }
+    except Exception as e:
+        print(f"❌ Delete template error: {e}")
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail="Template not found")
+        raise HTTPException(status_code=500, detail=f"Failed to delete template: {str(e)}")
+
+@app.put("/api/templates/{template_id}", tags=["Templates"])
+async def update_template(
+    template_id: str,
+    updates: Dict[str, Any],
+    current_user: dict = Depends(get_current_user)
+):
+    """Update template"""
+    try:
+        db.update_template(template_id, updates)
+        return {
+            "success": True,
+            "message": "Template updated successfully"
+        }
+    except Exception as e:
+        print(f"❌ Update template error: {e}")
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail="Template not found")
+        raise HTTPException(status_code=500, detail=f"Failed to update template: {str(e)}")
+
+# ============================================================================
+# SERVER STARTUP
+# ============================================================================
+
+if __name__ == "__main__":
+    import uvicorn
+    
+    # Initialize services
+    init_services()
+    
+    # Start server
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        log_level="info"
+    )
