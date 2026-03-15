@@ -16,7 +16,7 @@ from helper.postgres_helper import SupabaseManager
 # Import pools
 from browser_pool import get_browser_pool, cleanup_browser_pool
 sys.path.append(str(Path(__file__).parent.parent / "api" / "helper"))
-from connection_pool import get_connection_pool, get_pooled_supabase_manager, cleanup_connection_pool
+from connection_pool import get_connection_pool, get_pooled_db_manager, cleanup_connection_pool
 
 # Add API helper to path for shared utilities (with fallback)
 sys.path.append(str(Path(__file__).parent.parent / "api" / "helper"))

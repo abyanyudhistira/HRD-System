@@ -382,25 +382,21 @@ class SchedulerService:
         time.sleep(stagger_delay)
         
         # CRITICAL: Import fresh in thread to avoid connection issues
-        from helper.postgres_helper import SupabaseManager
+        from database import Database
         from helper.rabbitmq_helper import queue_publisher
         
-        # Create fresh Supabase manager for this thread
-        supabase_manager = SupabaseManager()
+        # Create fresh Database manager for this thread
+        db = Database()
         
         # Get schedule using fresh connection
-        schedule = supabase_manager.supabase.table('crawler_schedules').select('*').eq('id', schedule_id).execute()
-        if not schedule.data:
+        schedule = db.get_schedule(schedule_id)
+        if not schedule:
             print(f"✗ Schedule {schedule_id} not found")
             return {"success": False, "error": "Schedule not found"}
         
-        schedule = schedule.data[0]
-        
         # Update last run timestamp (non-critical, skip if fails)
         try:
-            supabase_manager.supabase.table('crawler_schedules').update({
-                'last_run': datetime.now().isoformat()
-            }).eq('id', schedule_id).execute()
+            db.update_last_run(schedule_id)
         except Exception as e:
             print(f"⚠️ Failed to update last_run (non-critical): {e}")
         
@@ -427,7 +423,7 @@ class SchedulerService:
         
         # Get leads for this template
         print(f"🔍 Fetching leads from database...")
-        leads = supabase_manager.get_leads_by_template_id(template_id)
+        leads = db.get_leads_by_template_id(template_id)
         
         if not leads:
             print("⚠ No leads found for template - auto-deactivating schedule")
@@ -532,7 +528,7 @@ class SchedulerService:
             if main_module and hasattr(main_module, 'current_crawl_session'):
                 # Get template name from database
                 try:
-                    template = supabase_manager.get_template_by_id(template_id)
+                    template = db.get_template_by_id(template_id)
                     template_name = template.get('name', 'Unknown Template') if template else f"Template {template_id[:8]}"
                 except Exception as e:
                     print(f"⚠️ Failed to get template name: {e}")

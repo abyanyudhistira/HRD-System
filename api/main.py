@@ -146,6 +146,31 @@ current_crawl_session = {
 }
 
 # ============================================================================
+# AUTHENTICATION DEPENDENCY
+# ============================================================================
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Dependency to get current authenticated user"""
+    token = credentials.credentials
+    user_data = verify_jwt_token(token)
+    
+    if not user_data:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token"
+        )
+    
+    # Get fresh user data from database
+    user = db.get_user_by_id(user_data['user_id'])
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found"
+        )
+    
+    return user
+
+# ============================================================================
 # PYDANTIC MODELS
 # ============================================================================
 
@@ -510,7 +535,7 @@ class ExternalScheduleRequest(BaseModel):
 
 
 @app.get("/api/schedules", tags=["Schedules"])
-async def get_schedules(external_source: Optional[str] = None):
+async def get_schedules(external_source: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """Get schedules with optional filtering by external_source"""
     try:
         print(f"\n📋 SCHEDULES REQUEST")
@@ -599,7 +624,7 @@ async def get_schedules(external_source: Optional[str] = None):
 
 @app.get("/api/schedules/{schedule_id}", tags=["Schedules"])
 @handle_api_errors
-async def get_schedule(schedule_id: str):
+async def get_schedule(schedule_id: str, current_user: dict = Depends(get_current_user)):
     """Get specific schedule by ID"""
     schedule = ScheduleManager.get_by_id(schedule_id)
     if not schedule:
@@ -609,7 +634,7 @@ async def get_schedule(schedule_id: str):
 
 
 @app.post("/api/schedules", tags=["Schedules"])
-async def create_schedule(schedule: CrawlerScheduleCreate):
+async def create_schedule(schedule: CrawlerScheduleCreate, current_user: dict = Depends(get_current_user)):
     """Create new schedule with validation"""
     try:
         # Validate cron expression first
@@ -670,7 +695,7 @@ async def create_schedule(schedule: CrawlerScheduleCreate):
 
 
 @app.put("/api/schedules/{schedule_id}", tags=["Schedules"])
-async def update_schedule(schedule_id: str, schedule: CrawlerScheduleUpdate):
+async def update_schedule(schedule_id: str, schedule: CrawlerScheduleUpdate, current_user: dict = Depends(get_current_user)):
     """Update existing schedule"""
     try:
         # Check if schedule exists
@@ -714,7 +739,7 @@ async def update_schedule(schedule_id: str, schedule: CrawlerScheduleUpdate):
 
 
 @app.delete("/api/schedules/{schedule_id}", tags=["Schedules"])
-async def delete_schedule(schedule_id: str):
+async def delete_schedule(schedule_id: str, current_user: dict = Depends(get_current_user)):
     """Delete schedule"""
     try:
         # Check if schedule exists
@@ -747,7 +772,7 @@ async def delete_schedule(schedule_id: str):
 
 
 @app.patch("/api/schedules/{schedule_id}/toggle", tags=["Schedules"])
-async def toggle_schedule(schedule_id: str):
+async def toggle_schedule(schedule_id: str, current_user: dict = Depends(get_current_user)):
     """Toggle schedule status between 'active' and 'inactive'"""
     try:
         # Get current schedule
@@ -801,7 +826,7 @@ async def toggle_schedule(schedule_id: str):
 
 @app.get("/api/schedules/queue/status", tags=["Schedules"])
 @handle_api_errors
-async def get_queue_status():
+async def get_queue_status(current_user: dict = Depends(get_current_user)):
     """Get RabbitMQ queue status"""
     try:
         from helper.rabbitmq_helper import queue_publisher
@@ -814,7 +839,7 @@ async def get_queue_status():
 
 @app.post("/api/schedules/{schedule_id}/execute", tags=["Schedules"])
 @handle_api_errors
-async def execute_schedule_manually(schedule_id: str):
+async def execute_schedule_manually(schedule_id: str, current_user: dict = Depends(get_current_user)):
     """Execute schedule manually"""
     global current_crawl_session
     
@@ -972,7 +997,7 @@ async def execute_schedule_manually(schedule_id: str):
 
 @app.post("/api/scraping/start", tags=["Scraping"])
 @handle_api_errors
-async def start_scraping(request: ScrapingRequest):
+async def start_scraping(request: ScrapingRequest, current_user: dict = Depends(get_current_user)):
     """Start scraping process"""
     global current_crawl_session
     
@@ -1048,7 +1073,7 @@ async def start_scraping(request: ScrapingRequest):
 
 @app.get("/api/scraping/analyze/{template_id}", tags=["Scraping"])
 @handle_api_errors
-async def analyze_lead(template_id: str):
+async def analyze_lead(template_id: str, current_user: dict = Depends(get_current_user)):
     """Analyze lead completion for template"""
     try:
         # Use Database to get leads with proper validation logic
@@ -1081,7 +1106,7 @@ async def analyze_lead(template_id: str):
 
 @app.get("/api/scraping/status", tags=["Scraping"])
 @handle_api_errors
-async def get_crawler_status():
+async def get_crawler_status(current_user: dict = Depends(get_current_user)):
     """Get current crawler status"""
     try:
         from helper.rabbitmq_helper import queue_publisher
@@ -1100,7 +1125,7 @@ async def get_crawler_status():
 
 @app.get("/api/scraping/session", tags=["Scraping"])
 @handle_api_errors
-async def get_crawl_session():
+async def get_crawl_session(current_user: dict = Depends(get_current_user)):
     """Get detailed crawl session information"""
     global current_crawl_session
     
@@ -1132,7 +1157,7 @@ async def get_crawl_session():
 # ============================================================================
 
 @app.get("/api/requirements/templates", tags=["Requirements"])
-async def get_templates():
+async def get_templates(current_user: dict = Depends(get_current_user)):
     """Get all requirements templates - OPTIMIZED"""
     try:
         print("📥 Fetching templates...")
@@ -1167,7 +1192,7 @@ async def get_templates():
 
 
 @app.post("/api/requirements/generate", tags=["Requirements"])
-async def generate_requirements(request: RequirementsGenerateRequest):
+async def generate_requirements(request: RequirementsGenerateRequest, current_user: dict = Depends(get_current_user)):
     """Generate requirements from job description text - Uses requirements_generator.py"""
     try:
         # Import from same directory (API folder)
@@ -1500,7 +1525,7 @@ def generate_requirements_simple(job_description, position_title):
 
 
 @app.post("/api/requirements/save", tags=["Requirements"])
-async def save_requirements(request: RequirementsSaveRequest):
+async def save_requirements(request: RequirementsSaveRequest, current_user: dict = Depends(get_current_user)):
     """Save requirements to JSON file"""
     try:
         # Ensure requirements directory exists
@@ -1532,7 +1557,7 @@ async def save_requirements(request: RequirementsSaveRequest):
 # ============================================================================
 
 @app.post("/api/external/schedule-scraping", tags=["External Integration"])
-async def create_external_schedule(request: ExternalScheduleRequest):
+async def create_external_schedule(request: ExternalScheduleRequest, current_user: dict = Depends(get_current_user)):
     """Create comprehensive schedule for external platform integration - distributes data to multiple services"""
     try:
         # Generate unique job ID for Nara
@@ -2030,7 +2055,7 @@ async def check_and_complete_session():
 
 @app.post("/api/scraping/stop", tags=["Scraping"])
 @handle_api_errors
-async def stop_scraping():
+async def stop_scraping(current_user: dict = Depends(get_current_user)):
     """Stop scraping by purging the RabbitMQ queue"""
     global current_crawl_session
     
@@ -2096,7 +2121,7 @@ async def stop_scraping():
 # ============================================================================
 
 @app.post("/api/outreach/send", tags=["Outreach"])
-async def send_outreach(request: OutreachRequest):
+async def send_outreach(request: OutreachRequest, current_user: dict = Depends(get_current_user)):
     """Send outreach request to LavinMQ queue"""
     try:
         print("\n" + "="*60)
@@ -2178,7 +2203,7 @@ async def send_outreach(request: OutreachRequest):
 
 
 @app.get("/api/external/status/{schedule_id}", tags=["External Integration"])
-async def get_external_schedule_status(schedule_id: str):
+async def get_external_schedule_status(schedule_id: str, current_user: dict = Depends(get_current_user)):
     """Get status of external schedule"""
     try:
         print(f"\n📊 EXTERNAL STATUS CHECK: {schedule_id}")
@@ -2242,27 +2267,6 @@ if __name__ == "__main__":
 # ============================================================================
 # AUTHENTICATION DEPENDENCY
 # ============================================================================
-
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Dependency to get current authenticated user"""
-    token = credentials.credentials
-    user_data = verify_jwt_token(token)
-    
-    if not user_data:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token"
-        )
-    
-    # Get fresh user data from database
-    user = db.get_user_by_id(user_data['user_id'])
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found"
-        )
-    
-    return user
 
 # ============================================================================
 # AUTHENTICATION ENDPOINTS
