@@ -96,6 +96,10 @@ CREATE INDEX IF NOT EXISTS idx_history_schedule ON crawler_history(schedule_id);
 CREATE INDEX IF NOT EXISTS idx_history_status ON crawler_history(status);
 CREATE INDEX IF NOT EXISTS idx_leads_company ON leads(company_id);
 CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
+
+-- Add company_id FK to search_templates (migration)
+ALTER TABLE search_templates ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES companies(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_templates_company ON search_templates(company_id);
 CREATE INDEX IF NOT EXISTS idx_profiles_url ON profiles(linkedin_url);
 CREATE INDEX IF NOT EXISTS idx_profiles_score ON profiles(score);
 

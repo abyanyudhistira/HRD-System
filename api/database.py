@@ -306,6 +306,20 @@ class Database:
         finally:
             conn.close()
     
+    def get_templates_by_company(self, company_id: str) -> List[Dict[str, Any]]:
+        """Get all templates belonging to a specific company"""
+        conn = get_db_connection()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM search_templates WHERE company_id = %s ORDER BY created_at DESC",
+                    (company_id,)
+                )
+                templates = cur.fetchall()
+            return [dict(row) for row in templates]
+        finally:
+            conn.close()
+
     def get_template_by_id(self, template_id: str) -> Optional[Dict[str, Any]]:
         """Get template by ID"""
         conn = get_db_connection()
@@ -544,42 +558,190 @@ class Database:
     # LEADS METHODS (Enhanced)
     # ============================================================================
     
-    def get_all_leads(self, template_id: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """Get all leads with optional filtering"""
-        conn = get_db_connection()
-        try:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                query = "SELECT * FROM leads_list"
-                params = []
-                
-                if template_id:
-                    query += " WHERE template_id = %s"
-                    params.append(template_id)
-                
-                query += " ORDER BY date DESC"
-                
-                if limit:
-                    query += " LIMIT %s"
-                    params.append(limit)
-                
-                cur.execute(query, params)
-                leads = cur.fetchall()
-            return [dict(row) for row in leads]
-        finally:
-            conn.close()
+    def get_all_leads(self, template_id: Optional[str] = None, limit: Optional[int] = None, 
+                         page: Optional[int] = None, per_page: Optional[int] = None,
+                         search: Optional[str] = None, sort: Optional[str] = None, 
+                         order: Optional[str] = None) -> Dict[str, Any]:
+            """Get all leads with optional filtering, pagination, search and sorting"""
+            conn = get_db_connection()
+            try:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    # Base query
+                    base_query = "FROM leads_list"
+                    where_conditions = []
+                    params = []
+
+                    # Template filter
+                    if template_id:
+                        where_conditions.append("template_id = %s")
+                        params.append(template_id)
+
+                    # Search filter
+                    if search:
+                        where_conditions.append("(name ILIKE %s OR company ILIKE %s OR email ILIKE %s)")
+                        search_param = f"%{search}%"
+                        params.extend([search_param, search_param, search_param])
+
+                    # Build WHERE clause
+                    where_clause = ""
+                    if where_conditions:
+                        where_clause = " WHERE " + " AND ".join(where_conditions)
+
+                    # Get total count for pagination
+                    count_query = f"SELECT COUNT(*) {base_query}{where_clause}"
+                    cur.execute(count_query, params)
+                    total_count = cur.fetchone()['count']
+
+                    # Build main query
+                    query = f"SELECT * {base_query}{where_clause}"
+
+                    # Sorting
+                    valid_sort_fields = ['name', 'company', 'email', 'date', 'connection_status']
+                    sort_field = sort if sort in valid_sort_fields else 'date'
+                    sort_order = 'ASC' if order and order.upper() == 'ASC' else 'DESC'
+                    query += f" ORDER BY {sort_field} {sort_order}"
+
+                    # Pagination
+                    if page and per_page:
+                        offset = (page - 1) * per_page
+                        query += " LIMIT %s OFFSET %s"
+                        params.extend([per_page, offset])
+                    elif limit:
+                        query += " LIMIT %s"
+                        params.append(limit)
+
+                    cur.execute(query, params)
+                    leads = cur.fetchall()
+
+                    # Calculate pagination info
+                    total_pages = 1
+                    current_page = 1
+                    if page and per_page:
+                        total_pages = (total_count + per_page - 1) // per_page
+                        current_page = page
+
+                    return {
+                        'leads': [dict(row) for row in leads],
+                        'pagination': {
+                            'total_count': total_count,
+                            'total_pages': total_pages,
+                            'current_page': current_page,
+                            'per_page': per_page or len(leads),
+                            'has_next': current_page < total_pages if page and per_page else False,
+                            'has_prev': current_page > 1 if page and per_page else False
+                        }
+                    }
+            finally:
+                conn.close()
     
     # ============================================================================
     # COMPANIES METHODS
     # ============================================================================
     
-    def get_all_companies(self) -> List[Dict[str, Any]]:
-        """Get all companies"""
+    def get_all_companies(self, page: Optional[int] = None, per_page: Optional[int] = None,
+                           search: Optional[str] = None, sort: Optional[str] = None, 
+                           order: Optional[str] = None) -> Dict[str, Any]:
+            """Get all companies with optional pagination, search and sorting"""
+            conn = get_db_connection()
+            try:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    # Base query
+                    base_query = "FROM companies"
+                    where_conditions = []
+                    params = []
+
+                    # Search filter
+                    if search:
+                        where_conditions.append("(name ILIKE %s OR domain ILIKE %s)")
+                        search_param = f"%{search}%"
+                        params.extend([search_param, search_param])
+
+                    # Build WHERE clause
+                    where_clause = ""
+                    if where_conditions:
+                        where_clause = " WHERE " + " AND ".join(where_conditions)
+
+                    # Get total count for pagination
+                    count_query = f"SELECT COUNT(*) {base_query}{where_clause}"
+                    cur.execute(count_query, params)
+                    total_count = cur.fetchone()['count']
+
+                    # Build main query
+                    query = f"SELECT * {base_query}{where_clause}"
+
+                    # Sorting
+                    valid_sort_fields = ['name', 'domain', 'created_at']
+                    sort_field = sort if sort in valid_sort_fields else 'name'
+                    sort_order = 'ASC' if order and order.upper() == 'ASC' else 'DESC'
+                    query += f" ORDER BY {sort_field} {sort_order}"
+
+                    # Pagination
+                    if page and per_page:
+                        offset = (page - 1) * per_page
+                        query += " LIMIT %s OFFSET %s"
+                        params.extend([per_page, offset])
+
+                    cur.execute(query, params)
+                    companies = cur.fetchall()
+
+                    # Calculate pagination info
+                    total_pages = 1
+                    current_page = 1
+                    if page and per_page:
+                        total_pages = (total_count + per_page - 1) // per_page
+                        current_page = page
+
+                    return {
+                        'companies': [dict(row) for row in companies],
+                        'pagination': {
+                            'total_count': total_count,
+                            'total_pages': total_pages,
+                            'current_page': current_page,
+                            'per_page': per_page or len(companies),
+                            'has_next': current_page < total_pages if page and per_page else False,
+                            'has_prev': current_page > 1 if page and per_page else False
+                        }
+                    }
+            finally:
+                conn.close()
+    def get_template_requirements(self, template_id: str) -> List[Dict[str, Any]]:
+        """Get requirements for a specific template"""
         conn = get_db_connection()
         try:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("SELECT * FROM companies ORDER BY name")
-                companies = cur.fetchall()
-            return [dict(row) for row in companies]
+                # Get template requirements from search_templates table
+                cur.execute("""
+                    SELECT requirements
+                    FROM search_templates
+                    WHERE id = %s
+                """, (template_id,))
+
+                result = cur.fetchone()
+                if not result or not result['requirements']:
+                    return []
+
+                # Parse requirements JSON and extract unique keys/values
+                requirements_data = result['requirements']
+                if isinstance(requirements_data, str):
+                    import json
+                    requirements_data = json.loads(requirements_data)
+
+                # Extract requirement categories and their possible values
+                requirements = []
+                if isinstance(requirements_data, dict):
+                    for key, value in requirements_data.items():
+                        if isinstance(value, list):
+                            requirements.append({
+                                "key": key,
+                                "values": value
+                            })
+                        elif isinstance(value, str):
+                            requirements.append({
+                                "key": key,
+                                "values": [value]
+                            })
+
+                return requirements
         finally:
             conn.close()
     

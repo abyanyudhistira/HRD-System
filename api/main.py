@@ -1,7 +1,7 @@
 """
 FastAPI Backend for LinkedIn Crawler Scheduler
 """
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -1189,6 +1189,21 @@ async def get_templates(current_user: dict = Depends(get_current_user)):
             "templates": [],
             "error": str(e)
         }
+@app.get("/api/templates/{template_id}/requirements")
+async def get_template_requirements(
+    template_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get requirements for a specific template"""
+    try:
+        requirements = db.get_template_requirements(template_id)
+        return {
+            "success": True,
+            "requirements": requirements
+        }
+    except Exception as e:
+        print(f"❌ Template requirements error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get template requirements: {str(e)}")
 
 
 @app.post("/api/requirements/generate", tags=["Requirements"])
@@ -2357,17 +2372,36 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
         print(f"❌ Stats error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
 
-@app.get("/api/stats/leads", tags=["Dashboard"])
-async def get_leads_count(current_user: dict = Depends(get_current_user)):
-    """Get total leads count"""
+async def get_leads(
+    template_id: Optional[str] = None,
+    limit: Optional[int] = None,
+    page: Optional[int] = Query(None, ge=1, description="Page number (starts from 1)"),
+    per_page: Optional[int] = Query(None, ge=1, le=100, description="Items per page (max 100)"),
+    search: Optional[str] = Query(None, description="Search in name, company, email"),
+    sort: Optional[str] = Query(None, description="Sort field: name, company, email, date, connection_status"),
+    order: Optional[str] = Query(None, description="Sort order: asc or desc"),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get all leads with optional filtering, pagination, search and sorting"""
     try:
-        count = db.get_leads_count()
+        result = db.get_all_leads(
+            template_id=template_id,
+            limit=limit,
+            page=page,
+            per_page=per_page,
+            search=search,
+            sort=sort,
+            order=order
+        )
         return {
             "success": True,
-            "count": count
+            "count": len(result['leads']),
+            "leads": result['leads'],
+            "pagination": result['pagination']
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get leads count: {str(e)}")
+        print(f"❌ Leads error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get leads: {str(e)}")
 
 @app.get("/api/stats/templates", tags=["Dashboard"])
 async def get_templates_count(current_user: dict = Depends(get_current_user)):
@@ -2381,17 +2415,32 @@ async def get_templates_count(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get templates count: {str(e)}")
 
-@app.get("/api/stats/companies", tags=["Dashboard"])
-async def get_companies_count(current_user: dict = Depends(get_current_user)):
-    """Get total companies count"""
+async def get_companies(
+    page: Optional[int] = Query(None, ge=1, description="Page number (starts from 1)"),
+    per_page: Optional[int] = Query(None, ge=1, le=100, description="Items per page (max 100)"),
+    search: Optional[str] = Query(None, description="Search in company name or domain"),
+    sort: Optional[str] = Query(None, description="Sort field: name, domain, created_at"),
+    order: Optional[str] = Query(None, description="Sort order: asc or desc"),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get all companies with optional pagination, search and sorting"""
     try:
-        count = db.get_companies_count()
+        result = db.get_all_companies(
+            page=page,
+            per_page=per_page,
+            search=search,
+            sort=sort,
+            order=order
+        )
         return {
             "success": True,
-            "count": count
+            "count": len(result['companies']),
+            "companies": result['companies'],
+            "pagination": result['pagination']
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get companies count: {str(e)}")
+        print(f"❌ Companies error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get companies: {str(e)}")
 
 # ============================================================================
 # LEADS ENDPOINTS
@@ -2415,46 +2464,6 @@ async def get_leads(
         print(f"❌ Leads error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get leads: {str(e)}")
 
-@app.get("/api/leads/export", tags=["Leads"])
-async def export_leads(
-    template_id: Optional[str] = None,
-    format: str = "json",
-    current_user: dict = Depends(get_current_user)
-):
-    """Export leads data as JSON or CSV"""
-    try:
-        leads = db.get_all_leads(template_id=template_id)
-        
-        if format.lower() == "csv":
-            # Convert to CSV format
-            import csv
-            import io
-            
-            output = io.StringIO()
-            if leads:
-                writer = csv.DictWriter(output, fieldnames=leads[0].keys())
-                writer.writeheader()
-                writer.writerows(leads)
-            
-            return {
-                "success": True,
-                "format": "csv",
-                "data": output.getvalue(),
-                "count": len(leads)
-            }
-        else:
-            # Return as JSON
-            return {
-                "success": True,
-                "format": "json",
-                "data": leads,
-                "count": len(leads)
-            }
-            
-    except Exception as e:
-        print(f"❌ Export error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to export leads: {str(e)}")
-
 # ============================================================================
 # COMPANIES ENDPOINTS
 # ============================================================================
@@ -2473,9 +2482,26 @@ async def get_companies(current_user: dict = Depends(get_current_user)):
         print(f"❌ Companies error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get companies: {str(e)}")
 
+@app.get("/api/companies/{company_id}/templates", tags=["Companies"])
+async def get_company_templates(
+    company_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get all templates belonging to a specific company"""
+    try:
+        templates = db.get_templates_by_company(company_id)
+        return {
+            "success": True,
+            "company_id": company_id,
+            "count": len(templates),
+            "templates": templates
+        }
+    except Exception as e:
+        print(f"❌ Get company templates error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get templates: {str(e)}")
+
 @app.post("/api/companies", tags=["Companies"])
-async def create_company(
-    company: CompanyCreate,
+async def create_company(    company: CompanyCreate,
     current_user: dict = Depends(get_current_user)
 ):
     """Create new company"""

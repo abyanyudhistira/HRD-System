@@ -9,3 +9,4 @@ echo "Starting LinkedIn Crawler API..."
 # Start API server
 # Railway provides $PORT environment variable
 uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+ 
